@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-import os, requests, re, json
+import os, requests, re
 from dotenv import load_dotenv
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -10,7 +10,6 @@ app = Flask(__name__)
 
 # === LINE Bot 設定 ===
 LINE_TOKEN = os.getenv("LINE_TOKEN")
-USER_ID = os.getenv("USER_ID")
 GROUP_ID = os.getenv("GROUP_ID")  # TradingView 群組推播用
 LINE_API = "https://api.line.me/v2/bot/message/push"
 HEADERS = {
@@ -18,35 +17,14 @@ HEADERS = {
     "Authorization": f"Bearer {LINE_TOKEN}"
 }
 
-GROUP_RECORD_FILE = "groups.json"  # ✅ 用來記錄已通知的群組 ID
 
-
-def load_group_list():
-    """讀取已紀錄的群組 ID"""
-    if not os.path.exists(GROUP_RECORD_FILE):
-        return []
-    try:
-        with open(GROUP_RECORD_FILE, "r") as f:
-            data = json.load(f)
-            return data.get("groups", [])
-    except:
-        return []
-
-
-def save_group_list(groups):
-    """寫入群組 ID"""
-    with open(GROUP_RECORD_FILE, "w") as f:
-        json.dump({"groups": groups}, f, ensure_ascii=False, indent=2)
-
-
-def send_line(text: str, to_group=False, target_override=None):
-    """發送 LINE 訊息到群組或個人"""
-    target = target_override if target_override else (GROUP_ID if to_group else USER_ID)
-    if not LINE_TOKEN or not target:
-        return {"ok": False, "error": "Missing LINE_TOKEN or target ID"}
+def send_line(text: str):
+    """發送 LINE 訊息到群組"""
+    if not LINE_TOKEN or not GROUP_ID:
+        return {"ok": False, "error": "Missing LINE_TOKEN or GROUP_ID"}
 
     payload = {
-        "to": target,
+        "to": GROUP_ID,
         "messages": [{"type": "text", "text": text}]
     }
     try:
@@ -79,35 +57,15 @@ def home():
 @app.route("/notify")
 def notify():
     msg = f"📢 群組通知：{datetime.now(ZoneInfo('Asia/Taipei')).strftime('%Y-%m-%d %H:%M:%S')}"
-    return jsonify(send_line(msg, to_group=True))
+    return jsonify(send_line(msg))
 
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    """接收 TradingView Webhook → 轉台灣時間 → 發 LINE 群組"""
     try:
         data = request.get_json(force=True, silent=True)
-        print("🔥 收到 Webhook 原始資料：", data)
 
-        # =============== 🎯 LINE 官方 Webhook (抓群組ID) ===============
-        if isinstance(data, dict) and "events" in data:
-            events = data.get("events", [])
-            for event in events:
-                src = event.get("source", {})
-                if src.get("type") == "group":
-                    group_id = src.get("groupId")
-                    print(f"✅ LINE 群組事件：Group ID = {group_id}")
-
-                    # ✅ 讀取已記錄的群組 ID
-                    known_groups = load_group_list()
-                    if group_id not in known_groups:
-                        # ✅ 首次偵測 → 回傳群組 ID 到 USER_ID
-                        send_line(f"📢 偵測到新群組\nID = {group_id}", target_override=USER_ID)
-                        known_groups.append(group_id)
-                        save_group_list(known_groups)  # ✅ 寫入紀錄
-
-            return jsonify({"ok": True, "info": "LINE webhook processed"})
-
-        # =============== 📈 TradingView Webhook ===============
         if isinstance(data, dict):
             message = data.get("message") or data.get("msg") or str(data)
         else:
@@ -119,7 +77,7 @@ def webhook():
         # ✅ 時區轉換
         message = convert_utc_to_taipei(message)
 
-        result = send_line(message, to_group=True)
+        result = send_line(message)
         return jsonify({"ok": True, "message_sent": message, "result": result})
 
     except Exception as e:
