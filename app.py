@@ -52,16 +52,14 @@ def notify():
 def webhook():
     """
     接收 TradingView 的 Webhook 訊號
+    原樣轉送訊息，不修改內容
     """
     try:
         data = request.get_json(force=True, silent=True) or {}
         message = data.get("message") or data.get("msg") or str(data)
 
-        # 組合要推送的內容
-        now = datetime.now(ZoneInfo("Asia/Taipei")).strftime("%Y-%m-%d %H:%M:%S")
-        text = f"📈 TradingView 通知 ({now})\n{message}"
-
-        result = send_line(text, to_group=True)
+        # 原封不動轉發到 LINE 群組
+        result = send_line(message, to_group=True)
         return jsonify({"ok": True, "result": result})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
