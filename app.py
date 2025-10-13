@@ -2,6 +2,8 @@ from flask import Flask, request, jsonify
 import os
 import requests
 from dotenv import load_dotenv
+from datetime import datetime
+from zoneinfo import ZoneInfo  # Python 3.9+ 支援
 
 load_dotenv()
 
@@ -42,6 +44,18 @@ def send_line(text: str):
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+def convert_to_taiwan_time(utc_time_str: str) -> str:
+    """
+    將 UTC ISO 格式時間字串轉成台灣時間字串
+    範例：'2025-10-13T03:05:00Z' -> '2025-10-13 11:05:00'
+    """
+    try:
+        utc_time = datetime.fromisoformat(utc_time_str.replace("Z", "+00:00"))
+        taiwan_time = utc_time.astimezone(ZoneInfo("Asia/Taipei"))
+        return taiwan_time.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return utc_time_str  # 解析失敗就回原本字串
+
 @app.route("/", methods=["GET"])
 def index():
     return jsonify({"status": "ok", "info": "Line push webhook is running"}), 200
@@ -50,11 +64,7 @@ def index():
 def webhook():
     """
     接收 TradingView 或其他服務的 webhook。
-    支援：
-      - JSON body: {"message": "..."} 或 {"symbol": "...", "signal": "..."}
-      - application/x-www-form-urlencoded (form) with message field
-      - raw text body
-    會把解析後的文字透過 LINE push message 傳出。
+    自動轉換時間欄位到台灣時間並推送到 LINE。
     """
     data = {}
     decoded = None
@@ -73,11 +83,9 @@ def webhook():
     if not data:
         raw = request.get_data(as_text=True)
         if raw:
-            # TradingView 有時會直接傳 plain text
             data = {"message": raw.strip()}
 
     # 組合要發送的文字（優先順序）
-    # 支援常見欄位：message / text / symbol+signal / custom
     if isinstance(data, dict):
         # 1) raw message 或 text 欄位
         if data.get("message"):
@@ -87,16 +95,21 @@ def webhook():
         # 2) symbol + signal (結構化)
         elif data.get("symbol") and data.get("signal"):
             decoded = f"📈 TradingView 訊號通知\n商品：{data.get('symbol')}\n訊號：{data.get('signal')}"
-        # 3) 其他成對欄位（舉例：ticker + close）
+        # 3) ticker + close
         elif data.get("ticker") and data.get("close"):
             decoded = f"📈 {data.get('ticker')} 現價 {data.get('close')}\n原始訊息：{data}"
-        # 4) 若傳來整個 JSON，直接把它序列化
+        # 4) 若傳來整個 JSON，直接序列化
         else:
             try:
                 import json as _json
                 decoded = "Webhook JSON: " + _json.dumps(data, ensure_ascii=False)
             except Exception:
                 decoded = str(data)
+
+        # ✅ 自動加上台灣時間（如果有 time 欄位）
+        if data.get("time"):
+            taiwan_time = convert_to_taiwan_time(data.get("time"))
+            decoded += f"\n🕒 時間（台灣）：{taiwan_time}"
 
     # 如果真的還沒得到要傳的字串，回傳錯誤
     if not decoded:
