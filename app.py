@@ -34,7 +34,15 @@ def send_line(text: str, to_group=False):
         return {"ok": True, "status": r.status_code, "response": r.json()}
     except Exception as e:
         return {"ok": False, "error": str(e)}
-
+        
+@app.route("/webhook2", methods=["POST"])
+def webhook():
+    data = request.get_json()
+    events = data.get("events", [])
+    for event in events:
+        if event["source"]["type"] == "group":
+            print("Group ID:", event["source"]["groupId"])
+    return "ok"
 
 @app.route("/")
 def home():
