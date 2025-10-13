@@ -52,15 +52,24 @@ def notify():
 def webhook():
     """
     接收 TradingView 的 Webhook 訊號
-    原樣轉送訊息，不修改內容
+    支援 JSON 或純文字，原樣轉送
     """
     try:
-        data = request.get_json(force=True, silent=True) or {}
-        message = data.get("message") or data.get("msg") or str(data)
+        # 嘗試解析 JSON
+        data = request.get_json(force=True, silent=True)
+        if isinstance(data, dict) and data:
+            message = data.get("message") or data.get("msg") or str(data)
+        else:
+            # 若不是 JSON，改讀純文字內容
+            message = request.data.decode("utf-8").strip()
 
-        # 原封不動轉發到 LINE 群組
+        # 安全保護：確保訊息非空
+        if not message:
+            message = "(TradingView 傳來空訊息)"
+
+        # 原樣發送到 LINE 群組
         result = send_line(message, to_group=True)
-        return jsonify({"ok": True, "result": result})
+        return jsonify({"ok": True, "message_sent": message, "result": result})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
 
