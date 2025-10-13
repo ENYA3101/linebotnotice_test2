@@ -4,6 +4,8 @@ import requests
 from dotenv import load_dotenv
 from datetime import datetime
 from zoneinfo import ZoneInfo  # Python 3.9+ 支援
+import re
+import json
 
 load_dotenv()
 
@@ -19,21 +21,12 @@ HEADERS = {
 }
 
 def send_line(text: str):
-    """
-    使用 push message 發送單一文字訊息到 USER_ID。
-    回傳 LINE API 的 response (dict) 或錯誤字串。
-    """
     if not LINE_TOKEN or not USER_ID:
         return {"ok": False, "error": "LINE_TOKEN or USER_ID not set in environment"}
 
     payload = {
         "to": USER_ID,
-        "messages": [
-            {
-                "type": "text",
-                "text": text
-            }
-        ]
+        "messages": [{"type": "text", "text": text}]
     }
     try:
         r = requests.post(LINE_API, json=payload, headers=HEADERS, timeout=10)
@@ -45,16 +38,21 @@ def send_line(text: str):
         return {"ok": False, "error": str(e)}
 
 def convert_to_taiwan_time(utc_time_str: str) -> str:
-    """
-    將 UTC ISO 格式時間字串轉成台灣時間字串
-    範例：'2025-10-13T03:05:00Z' -> '2025-10-13 11:05:00'
-    """
     try:
         utc_time = datetime.fromisoformat(utc_time_str.replace("Z", "+00:00"))
         taiwan_time = utc_time.astimezone(ZoneInfo("Asia/Taipei"))
         return taiwan_time.strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
-        return utc_time_str  # 解析失敗就回原本字串
+        return utc_time_str
+
+def extract_time_from_message(text: str) -> str | None:
+    """
+    從字串中抓時間，支援 TradingView style: '時間=2025-10-13T05:00:00Z'
+    """
+    match = re.search(r'時間[=:]\s*([\d\-T\:Z]+)', text)
+    if match:
+        return match.group(1)
+    return None
 
 @app.route("/", methods=["GET"])
 def index():
@@ -62,10 +60,6 @@ def index():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    """
-    接收 TradingView 或其他服務的 webhook。
-    自動轉換時間欄位到台灣時間並推送到 LINE。
-    """
     data = {}
     decoded = None
 
@@ -75,7 +69,7 @@ def webhook():
     except Exception:
         data = {}
 
-    # 2) 若是表單資料（或 query string）
+    # 2) 若是表單資料
     if not data and request.form:
         data = request.form.to_dict()
 
@@ -85,33 +79,36 @@ def webhook():
         if raw:
             data = {"message": raw.strip()}
 
-    # 組合要發送的文字（優先順序）
+    # 組合要發送的文字
     if isinstance(data, dict):
-        # 1) raw message 或 text 欄位
         if data.get("message"):
             decoded = data.get("message")
         elif data.get("text"):
             decoded = data.get("text")
-        # 2) symbol + signal (結構化)
         elif data.get("symbol") and data.get("signal"):
             decoded = f"📈 TradingView 訊號通知\n商品：{data.get('symbol')}\n訊號：{data.get('signal')}"
-        # 3) ticker + close
         elif data.get("ticker") and data.get("close"):
-            decoded = f"📈 {data.get('ticker')} 現價 {data.get('close')}\n原始訊息：{data}"
-        # 4) 若傳來整個 JSON，直接序列化
+            decoded = f"📈 {data.get('ticker')} 現價 {data.get('close')}\n原始訊息：{json.dumps(data, ensure_ascii=False)}"
         else:
-            try:
-                import json as _json
-                decoded = "Webhook JSON: " + _json.dumps(data, ensure_ascii=False)
-            except Exception:
-                decoded = str(data)
+            decoded = "Webhook JSON: " + json.dumps(data, ensure_ascii=False)
 
-        # ✅ 自動加上台灣時間（如果有 time 欄位）
+        # ✅ 1) 優先檢查 time 欄位
+        taiwan_time = None
         if data.get("time"):
             taiwan_time = convert_to_taiwan_time(data.get("time"))
-            decoded += f"\n🕒 時間（台灣）：{taiwan_time}"
+        else:
+            # 2) 嘗試從訊息字串抓時間
+            time_str = extract_time_from_message(decoded)
+            if time_str:
+                taiwan_time = convert_to_taiwan_time(time_str)
 
-    # 如果真的還沒得到要傳的字串，回傳錯誤
+        if taiwan_time:
+            decoded += f"\n🕒 時間（台灣）：{taiwan_time}"
+        else:
+            # 3) 若都沒有，就用接收時間
+            now = datetime.now(ZoneInfo("Asia/Taipei"))
+            decoded += f"\n🕒 收到時間（台灣）：{now.strftime('%Y-%m-%d %H:%M:%S')}"
+
     if not decoded:
         return jsonify({"status": "error", "reason": "no message detected", "received": data}), 400
 
