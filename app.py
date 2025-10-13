@@ -6,20 +6,24 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import re
 import json
+import logging
 
 load_dotenv()
 
 app = Flask(__name__)
 
+# ===== 設定 logger =====
+app.logger.setLevel(logging.INFO)
+
 # ===== LINE Bot 設定 =====
-LINE_TOKEN = os.getenv("LINE_TOKEN")  # Channel Access Token
+LINE_TOKEN = os.getenv("LINE_TOKEN")
 LINE_API = "https://api.line.me/v2/bot/message/push"
 HEADERS = {
     "Content-Type": "application/json",
     "Authorization": f"Bearer {LINE_TOKEN}"
 }
 
-# 用來存抓到的群組 ID
+# 存抓到的群組 ID
 GROUP_ID = None
 
 def send_line(text: str, to_id: str):
@@ -57,7 +61,7 @@ def webhook():
     data = request.get_json(silent=True) or {}
     decoded = None
 
-    # 抓訊息內容
+    # 解析訊息內容
     if data.get("message"):
         decoded = data.get("message")
     elif data.get("text"):
@@ -89,14 +93,16 @@ def webhook():
             source = event.get("source", {})
             if source.get("type") == "group":
                 GROUP_ID = source.get("groupId")
-                print("抓到 groupId:", GROUP_ID)
+                app.logger.info("抓到 groupId: %s", GROUP_ID)
 
     if not GROUP_ID:
-        # 如果還沒抓到群組 ID，只回傳訊息，不推送
+        # 還沒抓到群組 ID，先回傳訊息，不推播
+        app.logger.info("尚未抓到群組 ID，訊息: %s", decoded)
         return jsonify({"status": "ok", "note": "還沒抓到群組 ID", "message": decoded}), 200
 
-    # 發送到抓到的群組
+    # 發送到群組
     result = send_line(decoded, GROUP_ID)
+    app.logger.info("已推播訊息到群組，結果: %s", result)
     return jsonify({"status": "ok", "sent": decoded, "line_response": result}), 200
 
 if __name__ == "__main__":
