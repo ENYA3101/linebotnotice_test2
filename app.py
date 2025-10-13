@@ -1,3 +1,10 @@
+from flask import Flask, request, jsonify
+import os, requests, json
+from dotenv import load_dotenv
+
+load_dotenv()
+
+app = Flask(__name__)  # ✅ 這一行一定要在
 @app.route("/webhook", methods=["POST"])
 def webhook():
     """
