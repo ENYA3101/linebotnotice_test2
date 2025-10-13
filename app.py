@@ -43,7 +43,7 @@ def convert_utc_to_taipei(msg: str) -> str:
             dt_utc = datetime.fromisoformat(utc_str.replace("Z", "+00:00"))
             dt_taipei = dt_utc.astimezone(ZoneInfo("Asia/Taipei"))
             taipei_str = dt_taipei.strftime("%Y-%m-%d %H:%M:%S")
-            msg = msg.replace(utc_str, f"{taipei_str} (台北時間)")
+            msg = msg.replace(utc_str, f"{taipei_str}")
         except Exception as e:
             print("❌ 時間轉換錯誤:", e)
     return msg
