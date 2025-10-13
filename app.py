@@ -1,8 +1,6 @@
 from flask import Flask, request, jsonify
-import os, requests, re
+import os, requests, json
 from dotenv import load_dotenv
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
 load_dotenv()
 
@@ -10,21 +8,41 @@ app = Flask(__name__)
 
 # === LINE Bot 設定 ===
 LINE_TOKEN = os.getenv("LINE_TOKEN")
-GROUP_ID = os.getenv("GROUP_ID")  # TradingView 群組推播用
+USER_ID = os.getenv("USER_ID")  # 只回傳到你的個人 LINE
 LINE_API = "https://api.line.me/v2/bot/message/push"
 HEADERS = {
     "Content-Type": "application/json",
     "Authorization": f"Bearer {LINE_TOKEN}"
 }
 
+GROUP_RECORD_FILE = "groups.json"  # ✅ 記錄已通知的群組 ID
+
+
+def load_group_list():
+    """讀取已紀錄的群組 ID"""
+    if not os.path.exists(GROUP_RECORD_FILE):
+        return []
+    try:
+        with open(GROUP_RECORD_FILE, "r") as f:
+            data = json.load(f)
+            return data.get("groups", [])
+    except:
+        return []
+
+
+def save_group_list(groups):
+    """寫入已通知過的群組 ID"""
+    with open(GROUP_RECORD_FILE, "w") as f:
+        json.dump({"groups": groups}, f, ensure_ascii=False, indent=2)
+
 
 def send_line(text: str):
-    """發送 LINE 訊息到群組"""
-    if not LINE_TOKEN or not GROUP_ID:
-        return {"ok": False, "error": "Missing LINE_TOKEN or GROUP_ID"}
+    """發送 LINE 訊息到你的個人帳號"""
+    if not LINE_TOKEN or not USER_ID:
+        return {"ok": False, "error": "Missing LINE_TOKEN or USER_ID"}
 
     payload = {
-        "to": GROUP_ID,
+        "to": USER_ID,
         "messages": [{"type": "text", "text": text}]
     }
     try:
@@ -34,65 +52,36 @@ def send_line(text: str):
         return {"ok": False, "error": str(e)}
 
 
-def convert_utc_to_taipei(msg: str) -> str:
-    """自動轉 UTC → 台北時間"""
-    match = re.search(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)', msg)
-    if match:
-        utc_str = match.group(1)
-        try:
-            dt_utc = datetime.fromisoformat(utc_str.replace("Z", "+00:00"))
-            dt_taipei = dt_utc.astimezone(ZoneInfo("Asia/Taipei"))
-            taipei_str = dt_taipei.strftime("%Y-%m-%d %H:%M:%S")
-            msg = msg.replace(utc_str, f"{taipei_str}")
-        except Exception as e:
-            print("❌ 時間轉換錯誤:", e)
-    return msg
-
-
 @app.route("/")
 def home():
-    return "✅ LINE Bot is running"
-
-
-@app.route("/notify")
-def notify():
-    msg = f"📢 群組通知：{datetime.now(ZoneInfo('Asia/Taipei')).strftime('%Y-%m-%d %H:%M:%S')}"
-    return jsonify(send_line(msg))
+    return "✅ LINE Bot is running (Group ID Scanner Mode)"
 
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    """
-    1️⃣ TradingView Webhook → 發訊息到 LINE 群組
-    2️⃣ LINE 官方 Webhook → 僅處理 message 類型事件
-    """
+    """只抓群組 ID，一次性通知"""
     try:
         data = request.get_json(force=True, silent=True)
 
-        # 先檢查是否是 LINE webhook event
         if isinstance(data, dict) and "events" in data:
             events = data.get("events", [])
             for event in events:
-                # 只處理 message 類型
-                if event.get("type") != "message":
-                    continue
-                # 如果是 message，可以在此擴充處理，例如回覆、分析等等
-            return jsonify({"ok": True, "info": "LINE webhook processed (message only)"})
+                src = event.get("source", {})
+                if src.get("type") == "group":
+                    group_id = src.get("groupId")
 
-        # 如果是 TradingView webhook
-        if isinstance(data, dict):
-            message = data.get("message") or data.get("msg") or str(data)
-        else:
-            message = request.data.decode("utf-8").strip()
+                    # ✅ 讀取已記錄的群組
+                    known_groups = load_group_list()
 
-        if not message:
-            message = "(TradingView 傳來空訊息)"
+                    if group_id not in known_groups:
+                        # ✅ 新群組 → 發給你
+                        send_line(f"📢 發現新群組\nID = {group_id}")
+                        known_groups.append(group_id)
+                        save_group_list(known_groups)  # ✅ 寫入紀錄
 
-        # 時區轉換
-        message = convert_utc_to_taipei(message)
+            return jsonify({"ok": True, "info": "Group ID scanner complete"})
 
-        result = send_line(message)
-        return jsonify({"ok": True, "message_sent": message, "result": result})
+        return jsonify({"ok": False, "error": "No LINE events"})
 
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
