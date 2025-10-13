@@ -62,10 +62,24 @@ def notify():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    """接收 TradingView Webhook → 轉台灣時間 → 發 LINE 群組"""
+    """
+    1️⃣ TradingView Webhook → 發訊息到 LINE 群組
+    2️⃣ LINE 官方 Webhook → 僅處理 message 類型事件
+    """
     try:
         data = request.get_json(force=True, silent=True)
 
+        # 先檢查是否是 LINE webhook event
+        if isinstance(data, dict) and "events" in data:
+            events = data.get("events", [])
+            for event in events:
+                # 只處理 message 類型
+                if event.get("type") != "message":
+                    continue
+                # 如果是 message，可以在此擴充處理，例如回覆、分析等等
+            return jsonify({"ok": True, "info": "LINE webhook processed (message only)"})
+
+        # 如果是 TradingView webhook
         if isinstance(data, dict):
             message = data.get("message") or data.get("msg") or str(data)
         else:
@@ -74,7 +88,7 @@ def webhook():
         if not message:
             message = "(TradingView 傳來空訊息)"
 
-        # ✅ 時區轉換
+        # 時區轉換
         message = convert_utc_to_taipei(message)
 
         result = send_line(message)
